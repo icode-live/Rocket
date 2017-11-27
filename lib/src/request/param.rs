@@ -1,9 +1,9 @@
 use std::str::FromStr;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, SocketAddr};
 use std::path::PathBuf;
 use std::fmt::Debug;
+use std::borrow::Cow;
 
-use http::uri::{URI, Segments, SegmentError};
+use http::uri::{Uri, Segments, SegmentError};
 use http::RawStr;
 
 /// Trait to convert a dynamic path segment string to a concrete value.
@@ -20,7 +20,7 @@ use http::RawStr;
 /// handler for the dynamic `"/<id>"` path:
 ///
 /// ```rust
-/// # #![feature(plugin)]
+/// # #![feature(plugin, decl_macro)]
 /// # #![plugin(rocket_codegen)]
 /// # extern crate rocket;
 /// #[get("/<id>")]
@@ -56,7 +56,7 @@ use http::RawStr;
 /// parameter as follows:
 ///
 /// ```rust
-/// # #![feature(plugin)]
+/// # #![feature(plugin, decl_macro)]
 /// # #![plugin(rocket_codegen)]
 /// # extern crate rocket;
 /// # use rocket::http::RawStr;
@@ -75,7 +75,7 @@ use http::RawStr;
 /// Rocket implements `FromParam` for several standard library types. Their
 /// behavior is documented here.
 ///
-///   * **f32, f64, isize, i8, i16, i32, i64, usize, u8, u16, u32, u64, bool
+///   * **f32, f64, isize, i8, i16, i32, i64, usize, u8, u16, u32, u64, bool,
 ///     IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, SocketAddr**
 ///
 ///     A value is parsed successfully if the `from_str` method from the given
@@ -93,6 +93,12 @@ use http::RawStr;
 ///     Percent decodes the path segment. If the decode is successful, the
 ///     decoded string is returned. Otherwise, an `Err` with the original path
 ///     segment is returned.
+///
+///   * **Cow<str>**
+///
+///     Percent decodes the path segment, allocating only when necessary. If the
+///     decode is successful, the decoded string is returned. Otherwise, an
+///     `Err` with the original path segment is returned.
 ///
 ///   * **Option&lt;T>** _where_ **T: FromParam**
 ///
@@ -163,7 +169,7 @@ use http::RawStr;
 /// dynamic path segment:
 ///
 /// ```rust
-/// # #![feature(plugin)]
+/// # #![feature(plugin, decl_macro)]
 /// # #![plugin(rocket_codegen)]
 /// # extern crate rocket;
 /// # use rocket::request::FromParam;
@@ -214,22 +220,34 @@ impl<'a> FromParam<'a> for String {
     }
 }
 
+impl<'a> FromParam<'a> for Cow<'a, str> {
+    type Error = &'a RawStr;
+
+    #[inline(always)]
+    fn from_param(param: &'a RawStr) -> Result<Cow<'a, str>, Self::Error> {
+        param.percent_decode().map_err(|_| param)
+    }
+}
+
 macro_rules! impl_with_fromstr {
-    ($($T:ident),+) => ($(
+    ($($T:ty),+) => ($(
         impl<'a> FromParam<'a> for $T {
             type Error = &'a RawStr;
 
             #[inline(always)]
             fn from_param(param: &'a RawStr) -> Result<Self, Self::Error> {
-                $T::from_str(param.as_str()).map_err(|_| param)
+                <$T as FromStr>::from_str(param.as_str()).map_err(|_| param)
             }
         }
     )+)
 }
 
-impl_with_fromstr!(f32, f64, isize, i8, i16, i32, i64, usize, u8, u16, u32, u64,
-       bool, IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6,
-       SocketAddr);
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, SocketAddr};
+
+impl_with_fromstr! {
+    i8, i16, i32, i64, isize, u8, u16, u32, u64, usize, f32, f64, bool,
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6, SocketAddr
+}
 
 impl<'a, T: FromParam<'a>> FromParam<'a> for Result<T, T::Error> {
     type Error = !;
@@ -313,7 +331,7 @@ impl<'a> FromSegments<'a> for PathBuf {
     fn from_segments(segments: Segments<'a>) -> Result<PathBuf, SegmentError> {
         let mut buf = PathBuf::new();
         for segment in segments {
-            let decoded = URI::percent_decode(segment.as_bytes())
+            let decoded = Uri::percent_decode(segment.as_bytes())
                 .map_err(|e| SegmentError::Utf8(e))?;
 
             if decoded == ".." {

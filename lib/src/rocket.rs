@@ -23,7 +23,7 @@ use fairing::{Fairing, Fairings};
 
 use http::{Method, Status, Header};
 use http::hyper::{self, header};
-use http::uri::URI;
+use http::uri::Uri;
 
 /// The main `Rocket` type: used to mount routes and catchers and launch the
 /// application.
@@ -43,9 +43,11 @@ impl hyper::Handler for Rocket {
     // `dispatch` function, which knows nothing about Hyper. Because responding
     // depends on the `HyperResponse` type, this function does the actual
     // response processing.
-    fn handle<'h, 'k>(&self,
-                      hyp_req: hyper::Request<'h, 'k>,
-                      res: hyper::FreshResponse<'h>) {
+    fn handle<'h, 'k>(
+        &self,
+        hyp_req: hyper::Request<'h, 'k>,
+        res: hyper::FreshResponse<'h>,
+    ) {
         // Get all of the information from Hyper.
         let (h_addr, h_method, h_headers, h_uri, _, h_body) = hyp_req.deconstruct();
 
@@ -55,7 +57,7 @@ impl hyper::Handler for Rocket {
             Ok(req) => req,
             Err(e) => {
                 error!("Bad incoming request: {}", e);
-                let dummy = Request::new(self, Method::Get, URI::new("<unknown>"));
+                let dummy = Request::new(self, Method::Get, Uri::new("<unknown>"));
                 let r = self.handle_error(Status::InternalServerError, &dummy);
                 return self.issue_response(r, res);
             }
@@ -111,14 +113,16 @@ impl Rocket {
     fn issue_response(&self, response: Response, hyp_res: hyper::FreshResponse) {
         match self.write_response(response, hyp_res) {
             Ok(_) => info_!("{}", Paint::green("Response succeeded.")),
-            Err(e) => error_!("Failed to write response: {:?}.", e)
+            Err(e) => error_!("Failed to write response: {:?}.", e),
         }
     }
 
     #[inline]
-    fn write_response(&self, mut response: Response,
-                      mut hyp_res: hyper::FreshResponse) -> io::Result<()>
-    {
+    fn write_response(
+        &self,
+        mut response: Response,
+        mut hyp_res: hyper::FreshResponse,
+    ) -> io::Result<()> {
         *hyp_res.status_mut() = hyper::StatusCode::from_u16(response.status().code);
 
         for header in response.headers().iter() {
@@ -178,9 +182,11 @@ impl Rocket {
         if let Some(current) = req.remote() {
             let ip = req.headers()
                 .get_one("X-Real-IP")
-                .and_then(|ip_str| ip_str.parse().map_err(|_| {
-                    warn_!("The 'X-Real-IP' header is malformed: {}", ip_str)
-                }).ok());
+                .and_then(|ip| {
+                    ip.parse()
+                        .map_err(|_| warn_!("'X-Real-IP' header is malformed: {}", ip))
+                        .ok()
+                });
 
             if let Some(ip) = ip {
                 req.set_remote(SocketAddr::new(ip, current.port()));
@@ -195,9 +201,8 @@ impl Rocket {
         if is_form && req.method() == Method::Post && data_len >= min_len {
             // We're only using this for comparison and throwing it away
             // afterwards, so it doesn't matter if we have invalid UTF8.
-            let form = unsafe {
-                from_utf8_unchecked(&data.peek()[..min(data_len, max_len)])
-            };
+            let form =
+                unsafe { from_utf8_unchecked(&data.peek()[..min(data_len, max_len)]) };
 
             if let Some((key, value)) = FormItems::from(form).next() {
                 if key == "_method" {
@@ -210,9 +215,11 @@ impl Rocket {
     }
 
     #[inline]
-    pub(crate) fn dispatch<'s, 'r>(&'s self,
-                                   request: &'r mut Request<'s>,
-                                   data: Data) -> Response<'r> {
+    pub(crate) fn dispatch<'s, 'r>(
+        &'s self,
+        request: &'r mut Request<'s>,
+        data: Data,
+    ) -> Response<'r> {
         info!("{}:", request);
 
         // Do a bit of preprocessing before routing; run the attached fairings.
@@ -235,9 +242,8 @@ impl Rocket {
                 // convince it to give us another mutable reference.
                 // TODO: Use something that is well defined, like UnsafeCell.
                 // But that causes variance issues...so wait for NLL.
-                let request: &'r mut Request<'s> = unsafe {
-                    (&mut *(request as *const _ as *mut _))
-                };
+                let request: &'r mut Request<'s> =
+                    unsafe { (&mut *(request as *const _ as *mut _)) };
 
                 // There was no matching route.
                 if request.method() == Method::Head {
@@ -273,9 +279,11 @@ impl Rocket {
     // (ensuring `handler` takes an immutable borrow), any caller to `route`
     // should be able to supply an `&mut` and retain an `&` after the call.
     #[inline]
-    pub(crate) fn route<'s, 'r>(&'s self,
-                                request: &'r Request<'s>,
-                                mut data: Data) -> handler::Outcome<'r> {
+    pub(crate) fn route<'s, 'r>(
+        &'s self,
+        request: &'r Request<'s>,
+        mut data: Data,
+    ) -> handler::Outcome<'r> {
         // Go through the list of matching routes until we fail or succeed.
         let matches = self.router.route(request);
         for route in matches {
@@ -290,7 +298,7 @@ impl Rocket {
             // to be forwarded. If it does, continue the loop to try again.
             info_!("{} {}", Paint::white("Outcome:"), outcome);
             match outcome {
-                o@Outcome::Success(_) | o @Outcome::Failure(_) => return o,
+                o@Outcome::Success(_) | o@Outcome::Failure(_) => return o,
                 Outcome::Forward(unused_data) => data = unused_data,
             };
         }
@@ -385,7 +393,7 @@ impl Rocket {
             logger::try_init(config.log_level, false);
         }
 
-        info!("🔧  Configured for {}.", config.environment);
+        info!("{}Configured for {}.", Paint::masked("🔧  "), config.environment);
         info_!("address: {}", Paint::white(&config.address));
         info_!("port: {}", Paint::white(&config.port));
         info_!("log: {}", Paint::white(config.log_level));
@@ -409,7 +417,9 @@ impl Rocket {
 
         for (name, value) in config.extras() {
             info_!("{} {}: {}",
-                   Paint::yellow("[extra]"), name, Paint::white(LoggedValue(value)));
+                   Paint::yellow("[extra]"),
+                   Paint::blue(name),
+                   Paint::white(LoggedValue(value)));
         }
 
         Rocket {
@@ -418,7 +428,7 @@ impl Rocket {
             default_catchers: catcher::defaults::get(),
             catchers: catcher::defaults::get(),
             state: Container::new(),
-            fairings: Fairings::new()
+            fairings: Fairings::new(),
         }
     }
 
@@ -438,7 +448,7 @@ impl Rocket {
     /// dispatched to the `hi` route.
     ///
     /// ```rust
-    /// # #![feature(plugin)]
+    /// # #![feature(plugin, decl_macro)]
     /// # #![plugin(rocket_codegen)]
     /// # extern crate rocket;
     /// #
@@ -475,16 +485,19 @@ impl Rocket {
     /// ```
     #[inline]
     pub fn mount(mut self, base: &str, routes: Vec<Route>) -> Self {
-        info!("🛰  {} '{}':", Paint::purple("Mounting"), base);
+        info!("{}{} '{}':",
+              Paint::masked("🛰  "),
+              Paint::purple("Mounting"),
+              Paint::blue(base));
 
-        if base.contains('<') {
+        if base.contains('<') || !base.starts_with('/') {
             error_!("Bad mount point: '{}'.", base);
-            error_!("Mount points must be static paths!");
+            error_!("Mount points must be static, absolute URIs: `/example`");
             panic!("Bad mount point.")
         }
 
         for mut route in routes {
-            let uri = URI::new(format!("{}/{}", base, route.uri));
+            let uri = Uri::new(format!("{}/{}", base, route.uri));
 
             route.set_base(base);
             route.set_uri(uri.to_string());
@@ -501,26 +514,26 @@ impl Rocket {
     /// # Examples
     ///
     /// ```rust
-    /// #![feature(plugin)]
+    /// #![feature(plugin, decl_macro)]
     /// #![plugin(rocket_codegen)]
     ///
     /// extern crate rocket;
     ///
     /// use rocket::Request;
     ///
-    /// #[error(500)]
+    /// #[catch(500)]
     /// fn internal_error() -> &'static str {
     ///     "Whoops! Looks like we messed up."
     /// }
     ///
-    /// #[error(400)]
+    /// #[catch(400)]
     /// fn not_found(req: &Request) -> String {
     ///     format!("I couldn't find '{}'. Try something else?", req.uri())
     /// }
     ///
     /// fn main() {
     /// # if false { // We don't actually want to launch the server in an example.
-    ///     rocket::ignite().catch(errors![internal_error, not_found])
+    ///     rocket::ignite().catch(catchers![internal_error, not_found])
     /// #       .launch();
     /// # }
     /// }
@@ -560,7 +573,7 @@ impl Rocket {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(plugin)]
+    /// # #![feature(plugin, decl_macro)]
     /// # #![plugin(rocket_codegen)]
     /// # extern crate rocket;
     /// use rocket::State;
@@ -596,7 +609,7 @@ impl Rocket {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(plugin)]
+    /// # #![feature(plugin, decl_macro)]
     /// # #![plugin(rocket_codegen)]
     /// # extern crate rocket;
     /// use rocket::Rocket;
@@ -622,8 +635,10 @@ impl Rocket {
     }
 
     pub(crate) fn prelaunch_check(&self) -> Option<LaunchError> {
-        if self.router.has_collisions() {
-            Some(LaunchError::from(LaunchErrorKind::Collision))
+        let collisions = self.router.collisions();
+        if !collisions.is_empty() {
+            let owned = collisions.iter().map(|&(a, b)| (a.clone(), b.clone()));
+            Some(LaunchError::from(LaunchErrorKind::Collision(owned.collect())))
         } else if self.fairings.had_failure() {
             Some(LaunchError::from(LaunchErrorKind::FailedFairing))
         } else {
@@ -662,23 +677,24 @@ impl Rocket {
         serve!(self, &full_addr, |server, proto| {
             let mut server = match server {
                 Ok(server) => server,
-                Err(e) => return LaunchError::from(e)
+                Err(e) => return LaunchError::from(e),
             };
 
             // Determine the address and port we actually binded to.
             match server.local_addr() {
                 Ok(server_addr) => self.config.port = server_addr.port(),
-                Err(e) => return LaunchError::from(e)
+                Err(e) => return LaunchError::from(e),
             }
 
             // Run the launch fairings.
             self.fairings.handle_launch(&self);
 
             let full_addr = format!("{}:{}", self.config.address, self.config.port);
-            launch_info!("🚀  {} {}{}",
-                  Paint::white("Rocket has launched from"),
-                  Paint::white(proto).bold(),
-                  Paint::white(&full_addr).bold());
+            launch_info!("{}{} {}{}",
+                         Paint::masked("🚀  "),
+                         Paint::white("Rocket has launched from"),
+                         Paint::white(proto).bold(),
+                         Paint::white(&full_addr).bold());
 
             let threads = self.config.workers as usize;
             if let Err(e) = server.handle_threads(self, threads) {
@@ -695,7 +711,7 @@ impl Rocket {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(plugin)]
+    /// # #![feature(plugin, decl_macro)]
     /// # #![plugin(rocket_codegen)]
     /// # extern crate rocket;
     /// use rocket::Rocket;
@@ -723,7 +739,7 @@ impl Rocket {
     /// }
     /// ```
     #[inline(always)]
-    pub fn routes<'a>(&'a self) -> impl Iterator<Item=&'a Route> + 'a {
+    pub fn routes<'a>(&'a self) -> impl Iterator<Item = &'a Route> + 'a {
         self.router.routes()
     }
 
@@ -732,7 +748,7 @@ impl Rocket {
     /// # Example
     ///
     /// ```rust
-    /// # #![feature(plugin)]
+    /// # #![feature(plugin, decl_macro)]
     /// # #![plugin(rocket_codegen)]
     /// # extern crate rocket;
     /// use rocket::Rocket;

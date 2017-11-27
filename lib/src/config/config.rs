@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, lookup_host};
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::convert::AsRef;
 use std::fmt;
@@ -313,7 +313,12 @@ impl Config {
     /// # }
     /// ```
     pub fn set_root<P: AsRef<Path>>(&mut self, path: P) {
-        self.config_path = path.as_ref().join("Rocket.custom.toml")
+        let new_path = match self.config_path.file_name() {
+            Some(file) => path.as_ref().join(file),
+            None => path.as_ref().join("Rocket.custom.toml")
+        };
+
+        self.config_path = new_path
     }
 
     /// Sets the address of `self` to `address`.
@@ -339,7 +344,7 @@ impl Config {
     /// ```
     pub fn set_address<A: Into<String>>(&mut self, address: A) -> Result<()> {
         let address = address.into();
-        if address.parse::<IpAddr>().is_err() && lookup_host(&address).is_err() {
+        if (&*address, 0u16).to_socket_addrs().is_err() {
             return Err(self.bad_type("address", "string", "a valid hostname or IP"));
         }
 
@@ -495,16 +500,16 @@ impl Config {
         let pem_err = "malformed PEM file";
 
         // Load the certificates.
-        let certs = tls::load_certs(certs_path)
+        let certs = tls::load_certs(self.root_relative(certs_path))
             .map_err(|e| match e {
-                Io(e) => ConfigError::Io(e, "tls"),
+                Io(e) => ConfigError::Io(e, "tls.certs"),
                 _ => self.bad_type("tls", pem_err, "a valid certificates file")
             })?;
 
         // And now the private key.
-        let key = tls::load_private_key(key_path)
+        let key = tls::load_private_key(self.root_relative(key_path))
             .map_err(|e| match e {
-                Io(e) => ConfigError::Io(e, "tls"),
+                Io(e) => ConfigError::Io(e, "tls.key"),
                 _ => self.bad_type("tls", pem_err, "a valid private key file")
             })?;
 
@@ -592,7 +597,7 @@ impl Config {
         self.secret_key.inner()
     }
 
-    /// Attempts to retrieve the extra named `name` as a string.
+    /// Attempts to retrieve the extra named `name` as a borrowed string.
     ///
     /// # Errors
     ///
@@ -614,6 +619,29 @@ impl Config {
     pub fn get_str<'a>(&'a self, name: &str) -> Result<&'a str> {
         let val = self.extras.get(name).ok_or_else(|| ConfigError::NotFound)?;
         val.as_str().ok_or_else(|| self.bad_type(name, val.type_str(), "a string"))
+    }
+
+    /// Attempts to retrieve the extra named `name` as an owned string.
+    ///
+    /// # Errors
+    ///
+    /// If an extra with `name` doesn't exist, returns an `Err` of `NotFound`.
+    /// If an extra with `name` _does_ exist but is not a string, returns a
+    /// `BadType` error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rocket::config::{Config, Environment};
+    ///
+    /// let config = Config::build(Environment::Staging)
+    ///     .extra("my_extra", "extra_value")
+    ///     .unwrap();
+    ///
+    /// assert_eq!(config.get_string("my_extra"), Ok("extra_value".to_string()));
+    /// ```
+    pub fn get_string(&self, name: &str) -> Result<String> {
+        self.get_str(name).map(|s| s.to_string())
     }
 
     /// Attempts to retrieve the extra named `name` as an integer.
@@ -787,19 +815,51 @@ impl Config {
             None => panic!("root(): path {:?} has no parent", self.config_path)
         }
     }
+
+    /// If `path` is a relative path, `path` is appended to the [`root`] at
+    /// which the configuration file for `self` is stored and the new path is
+    /// returned. If `path` is absolute, `path` is returned unaltered.
+    ///
+    /// [`root`]: /rocket/struct.Config.html#method.root
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::env::current_dir;
+    /// use std::path::Path;
+    /// use rocket::config::{Config, Environment};
+    ///
+    /// let config = Config::new(Environment::Staging)
+    ///     .expect("can retrieve current directory");
+    ///
+    /// assert_eq!(config.root(), current_dir().unwrap());
+    /// assert_eq!(config.root_relative("abc"), config.root().join("abc"));
+    /// assert_eq!(config.root_relative("/abc"), Path::new("/abc"));
+    /// ```
+    pub fn root_relative<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        let path = path.as_ref();
+        if path.is_absolute() {
+            path.into()
+        } else {
+            self.root().join(path)
+        }
+    }
 }
 
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Config[{}] {{ address: {}, port: {}, workers: {}, log: {:?}",
-               self.environment, self.address, self.port, self.workers,
-               self.log_level)?;
+        let mut s = f.debug_struct("Config");
+        s.field("environment", &self.environment);
+        s.field("address", &self.address);
+        s.field("port", &self.port);
+        s.field("workers", &self.workers);
+        s.field("log_level", &self.log_level);
 
         for (key, value) in self.extras() {
-            write!(f, ", {}: {}", key, value)?;
+            s.field(key, &value);
         }
 
-        write!(f, " }}")
+        s.finish()
     }
 }
 

@@ -25,10 +25,8 @@ impl Router {
     pub fn add(&mut self, route: Route) {
         let selector = route.method;
         let entries = self.routes.entry(selector).or_insert_with(|| vec![]);
-        // TODO: We really just want an insertion at the correct spot here,
-        // instead of pushing to the end and _then_ sorting.
-        entries.push(route);
-        entries.sort_by(|a, b| a.rank.cmp(&b.rank));
+        let i = entries.binary_search_by_key(&route.rank, |r| r.rank).unwrap_or_else(|i| i);
+        entries.insert(i, route);
     }
 
     pub fn route<'b>(&'b self, req: &Request) -> Vec<&'b Route> {
@@ -44,20 +42,26 @@ impl Router {
         matches
     }
 
-    pub fn has_collisions(&self) -> bool {
-        let mut result = false;
+    pub fn collisions(&self) -> Vec<(&Route, &Route)> {
+        let mut result = vec![];
         for routes in self.routes.values() {
             for (i, a_route) in routes.iter().enumerate() {
                 for b_route in routes.iter().skip(i + 1) {
                     if a_route.collides_with(b_route) {
-                        result = true;
-                        error!("{} and {} collide!", a_route, b_route);
+                        result.push((a_route, b_route));
                     }
                 }
             }
         }
 
         result
+    }
+
+
+    // This is slow. Don't expose this publicly; only for tests.
+    #[cfg(test)]
+    fn has_collisions(&self) -> bool {
+        !self.collisions().is_empty()
     }
 
     #[inline]
@@ -74,7 +78,7 @@ mod test {
     use config::Config;
     use http::Method;
     use http::Method::*;
-    use http::uri::URI;
+    use http::uri::Uri;
     use request::Request;
     use data::Data;
     use handler::Outcome;
@@ -162,7 +166,7 @@ mod test {
 
     fn route<'a>(router: &'a Router, method: Method, uri: &str) -> Option<&'a Route> {
         let rocket = Rocket::custom(Config::development().unwrap(), true);
-        let request = Request::new(&rocket, method, URI::new(uri));
+        let request = Request::new(&rocket, method, Uri::new(uri));
         let matches = router.route(&request);
         if matches.len() > 0 {
             Some(matches[0])
@@ -173,7 +177,7 @@ mod test {
 
     fn matches<'a>(router: &'a Router, method: Method, uri: &str) -> Vec<&'a Route> {
         let rocket = Rocket::custom(Config::development().unwrap(), true);
-        let request = Request::new(&rocket, method, URI::new(uri));
+        let request = Request::new(&rocket, method, Uri::new(uri));
         router.route(&request)
     }
 
@@ -400,7 +404,7 @@ mod test {
     fn match_params(router: &Router, path: &str, expected: &[&str]) -> bool {
         println!("Testing: {} (expect: {:?})", path, expected);
         route(router, Get, path).map_or(false, |route| {
-            let params = route.get_param_indexes(&URI::new(path));
+            let params = route.get_param_indexes(&Uri::new(path));
             if params.len() != expected.len() {
                 return false;
             }

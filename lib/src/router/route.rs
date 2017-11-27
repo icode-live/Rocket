@@ -6,19 +6,21 @@ use yansi::Color::*;
 use codegen::StaticRouteInfo;
 use handler::Handler;
 use http::{Method, MediaType};
-use http::uri::URI;
+use http::uri::Uri;
 
 /// A route: a method, its handler, path, rank, and format/media type.
 pub struct Route {
+    /// The name of this route, if one was given.
+    pub name: Option<&'static str>,
     /// The method this route matches against.
     pub method: Method,
     /// The function that should be called when the route matches.
     pub handler: Handler,
     /// The base mount point of this `Route`.
-    pub base: URI<'static>,
+    pub base: Uri<'static>,
     /// The uri (in Rocket format) that should be matched against. This uri
     /// already includes the base mount point.
-    pub uri: URI<'static>,
+    pub uri: Uri<'static>,
     /// The rank of this route. Lower ranks have higher priorities.
     pub rank: isize,
     /// The media type this route matches against, if any.
@@ -26,7 +28,7 @@ pub struct Route {
 }
 
 #[inline(always)]
-fn default_rank(uri: &URI) -> isize {
+fn default_rank(uri: &Uri) -> isize {
     // static path, query = -4; static path, no query = -3
     // dynamic path, query = -2; dynamic path, no query = -1
     match (!uri.path().contains('<'),  uri.query().is_some()) {
@@ -78,12 +80,13 @@ impl Route {
     pub fn new<S>(m: Method, path: S, handler: Handler) -> Route
         where S: AsRef<str>
     {
-        let uri = URI::from(path.as_ref().to_string());
+        let uri = Uri::from(path.as_ref().to_string());
         Route {
+            name: None,
             method: m,
             handler: handler,
             rank: default_rank(&uri),
-            base: URI::from("/"),
+            base: Uri::from("/"),
             uri: uri,
             format: None,
         }
@@ -110,10 +113,11 @@ impl Route {
         where S: AsRef<str>
     {
         Route {
+            name: None,
             method: m,
             handler: handler,
-            base: URI::from("/"),
-            uri: URI::from(uri.as_ref().to_string()),
+            base: Uri::from("/"),
+            uri: Uri::from(uri.as_ref().to_string()),
             rank: rank,
             format: None,
         }
@@ -164,7 +168,7 @@ impl Route {
     /// assert_eq!(index.base.path(), "/hi");
     /// ```
     pub fn set_base<S>(&mut self, path: S) where S: AsRef<str> {
-        self.base = URI::from(path.as_ref().to_string());
+        self.base = Uri::from(path.as_ref().to_string());
     }
 
     /// Sets the path of the route. Does not update the rank or any other
@@ -188,7 +192,7 @@ impl Route {
     /// assert_eq!(index.uri.path(), "/hello");
     /// ```
     pub fn set_uri<S>(&mut self, uri: S) where S: AsRef<str> {
-        self.uri = URI::from(uri.as_ref().to_string());
+        self.uri = Uri::from(uri.as_ref().to_string());
     }
 
     // FIXME: Decide whether a component has to be fully variable or not. That
@@ -196,7 +200,7 @@ impl Route {
     // TODO: Don't return a Vec...take in an &mut [&'a str] (no alloc!)
     /// Given a URI, returns a vector of slices of that URI corresponding to the
     /// dynamic segments in this route.
-    pub(crate) fn get_param_indexes(&self, uri: &URI) -> Vec<(usize, usize)> {
+    pub(crate) fn get_param_indexes(&self, uri: &Uri) -> Vec<(usize, usize)> {
         let route_segs = self.uri.segments();
         let uri_segs = uri.segments();
         let start_addr = uri.path().as_ptr() as usize;
@@ -220,6 +224,7 @@ impl Route {
 impl Clone for Route {
     fn clone(&self) -> Route {
         Route {
+            name: self.name,
             method: self.method,
             handler: self.handler,
             rank: self.rank,
@@ -242,6 +247,11 @@ impl fmt::Display for Route {
             write!(f, " {}", Yellow.paint(format))?;
         }
 
+        if let Some(name) = self.name {
+            write!(f, " {}{}{}",
+                   Cyan.paint("("), Purple.paint(name), Cyan.paint(")"))?;
+        }
+
         Ok(())
     }
 }
@@ -257,6 +267,7 @@ impl<'a> From<&'a StaticRouteInfo> for Route {
     fn from(info: &'a StaticRouteInfo) -> Route {
         let mut route = Route::new(info.method, info.path, info.handler);
         route.format = info.format.clone();
+        route.name = Some(info.name);
         if let Some(rank) = info.rank {
             route.rank = rank;
         }

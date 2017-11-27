@@ -1,16 +1,14 @@
 #![feature(specialization)]
 #![feature(conservative_impl_trait)]
-#![feature(drop_types_in_const)]
 #![feature(const_fn)]
-#![feature(lookup_host)]
-#![feature(plugin)]
+#![feature(plugin, decl_macro)]
 #![feature(never_type)]
 #![feature(try_trait)]
 
 #![plugin(pear_codegen)]
 
 // TODO: Version URLs.
-#![doc(html_root_url = "https://api.rocket.rs/rocket/")]
+#![doc(html_root_url = "https://api.rocket.rs")]
 
 //! # Rocket - Core API Documentation
 //!
@@ -56,7 +54,7 @@
 //! Then, add the following to the top of your `main.rs` file:
 //!
 //! ```rust
-//! #![feature(plugin)]
+//! #![feature(plugin, decl_macro)]
 //! # #![allow(unused_attributes)]
 //! #![plugin(rocket_codegen)]
 //!
@@ -67,7 +65,7 @@
 //! write Rocket applications. Here's a simple example to get you started:
 //!
 //! ```rust
-//! #![feature(plugin)]
+//! #![feature(plugin, decl_macro)]
 //! #![plugin(rocket_codegen)]
 //!
 //! extern crate rocket;
@@ -103,9 +101,9 @@
 #[macro_use] extern crate pear;
 #[cfg(feature = "tls")] extern crate rustls;
 #[cfg(feature = "tls")] extern crate hyper_sync_rustls;
+#[macro_use] extern crate percent_encoding;
 extern crate yansi;
 extern crate hyper;
-extern crate url;
 extern crate toml;
 extern crate num_cpus;
 extern crate state;

@@ -1,8 +1,8 @@
-#![feature(drop_types_in_const, macro_reexport)]
+#![feature(macro_reexport)]
 #![cfg_attr(feature = "templates", feature(conservative_impl_trait))]
 
 // TODO: Version URLs.
-#![doc(html_root_url = "https://api.rocket.rs/rocket_contrib/")]
+#![doc(html_root_url = "https://api.rocket.rs")]
 
 //! This crate contains officially sanctioned contributor libraries that provide
 //! functionality commonly used by Rocket applications.
@@ -54,7 +54,7 @@ extern crate serde_json;
 pub mod json;
 
 #[cfg(feature = "json")]
-pub use json::{Json, SerdeError, Value};
+pub use json::{Json, SerdeError, JsonValue};
 
 #[cfg(feature = "msgpack")]
 #[doc(hidden)]

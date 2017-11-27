@@ -1,4 +1,4 @@
-#![feature(plugin)]
+#![feature(plugin, decl_macro)]
 #![plugin(rocket_codegen)]
 
 extern crate rocket;
@@ -9,7 +9,7 @@ use rocket::response::Redirect;
 
 #[get("/")]
 fn root() -> Redirect {
-    Redirect::to("/login")
+    Redirect::to(uri!(login))
 }
 
 #[get("/login")]

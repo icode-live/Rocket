@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::io;
+use std::io::{self, BufReader};
 use std::ops::{Deref, DerefMut};
 
 use request::Request;
@@ -83,14 +83,12 @@ impl Responder<'static> for NamedFile {
     fn respond_to(self, _: &Request) -> Result<Response<'static>, Status> {
         let mut response = Response::new();
         if let Some(ext) = self.path().extension() {
-            // TODO: Use Cow for lowercase.
-            let ext_string = ext.to_string_lossy().to_lowercase();
-            if let Some(content_type) = ContentType::from_extension(&ext_string) {
-                response.set_header(content_type);
+            if let Some(ct) = ContentType::from_extension(&ext.to_string_lossy()) {
+                response.set_header(ct);
             }
         }
 
-        response.set_streamed_body(self.take_file());
+        response.set_streamed_body(BufReader::new(self.take_file()));
         Ok(response)
     }
 }

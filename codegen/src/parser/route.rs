@@ -6,11 +6,11 @@ use syntax::ext::base::{ExtCtxt, Annotatable};
 use syntax::codemap::{Span, Spanned, dummy_spanned};
 
 use utils::{span, MetaItemExt, SpanExt, is_valid_ident};
-use super::{Function, ParamIter};
+use super::Function;
 use super::keyvalue::KVSpanned;
 use super::uri::validate_uri;
 use rocket::http::{Method, MediaType};
-use rocket::http::uri::URI;
+use rocket::http::uri::Uri;
 
 /// This structure represents the parsed `route` attribute.
 ///
@@ -22,7 +22,7 @@ use rocket::http::uri::URI;
 pub struct RouteParams {
     pub annotated_fn: Function,
     pub method: Spanned<Method>,
-    pub uri: Spanned<URI<'static>>,
+    pub uri: Spanned<Uri<'static>>,
     pub data_param: Option<KVSpanned<Ident>>,
     pub query_param: Option<Spanned<Ident>>,
     pub format: Option<KVSpanned<MediaType>>,
@@ -33,12 +33,13 @@ impl RouteParams {
     /// Parses the route attribute from the given decorator context. If the
     /// parse is not successful, this function exits early with the appropriate
     /// error message to the user.
-    pub fn from(ecx: &mut ExtCtxt,
-                sp: Span,
-                known_method: Option<Spanned<Method>>,
-                meta_item: &MetaItem,
-                annotated: &Annotatable)
-                -> RouteParams {
+    pub fn from(
+        ecx: &mut ExtCtxt,
+        sp: Span,
+        known_method: Option<Spanned<Method>>,
+        meta_item: &MetaItem,
+        annotated: &Annotatable
+    ) -> RouteParams {
         let function = Function::from(annotated).unwrap_or_else(|item_sp| {
             ecx.span_err(sp, "this attribute can only be used on functions...");
             ecx.span_fatal(item_sp, "...but was applied to the item above.");
@@ -125,12 +126,6 @@ impl RouteParams {
             annotated_fn: function,
         }
     }
-
-    pub fn path_params<'s, 'a, 'c: 'a>(&'s self,
-                                   ecx: &'a ExtCtxt<'c>)
-                                    -> ParamIter<'s, 'a, 'c> {
-        ParamIter::new(ecx, self.uri.node.path(), self.uri.span.trim(1))
-    }
 }
 
 fn is_valid_method(method: Method) -> bool {
@@ -169,28 +164,30 @@ pub fn param_to_ident(ecx: &ExtCtxt, s: Spanned<&str>) -> Option<Spanned<Ident>>
 }
 
 fn parse_method(ecx: &ExtCtxt, meta_item: &NestedMetaItem) -> Spanned<Method> {
+    let valid_methods = "valid methods are: `GET`, `PUT`, `POST`, `DELETE`, `PATCH`";
+    let default_method = dummy_spanned(Method::Get);
+
     if let Some(word) = meta_item.word() {
         if let Ok(method) = Method::from_str(&word.name().as_str()) {
             if is_valid_method(method) {
                 return span(method, word.span());
             }
-        } else {
-            let msg = format!("'{}' is not a valid HTTP method.", word.name());
-            ecx.span_err(word.span(), &msg);
         }
+
+        let msg = format!("'{}' is not a valid method", word.name());
+        ecx.struct_span_err(word.span, &msg).help(valid_methods).emit();
+        return default_method;
     }
 
-    // Fallthrough. Return default method.
-    ecx.struct_span_err(meta_item.span, "expected a valid HTTP method")
-        .help("valid methods are: GET, PUT, POST, DELETE, PATCH")
-        .emit();
-
+    // Fallthrough. Emit a generic error message and return default method.
+    let msg = "expected a valid HTTP method identifier";
+    ecx.struct_span_err(meta_item.span, msg).help(valid_methods).emit();
     dummy_spanned(Method::Get)
 }
 
 fn parse_path(ecx: &ExtCtxt,
               meta_item: &NestedMetaItem)
-              -> (Spanned<URI<'static>>, Option<Spanned<Ident>>) {
+              -> (Spanned<Uri<'static>>, Option<Spanned<Ident>>) {
     let sp = meta_item.span();
     if let Some((name, lit)) = meta_item.name_value() {
         if name != &"path" {
@@ -210,7 +207,7 @@ fn parse_path(ecx: &ExtCtxt,
             .emit();
     }
 
-    (dummy_spanned(URI::new("")), None)
+    (dummy_spanned(Uri::new("")), None)
 }
 
 fn parse_opt<O, T, F>(ecx: &ExtCtxt, kv: &KVSpanned<T>, f: F) -> Option<KVSpanned<O>>

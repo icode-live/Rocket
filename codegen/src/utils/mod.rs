@@ -3,19 +3,21 @@ mod arg_ext;
 mod parser_ext;
 mod ident_ext;
 mod span_ext;
+mod expr_ext;
 
 pub use self::arg_ext::ArgExt;
 pub use self::meta_item_ext::MetaItemExt;
 pub use self::parser_ext::ParserExt;
 pub use self::ident_ext::IdentExt;
 pub use self::span_ext::SpanExt;
+pub use self::expr_ext::ExprExt;
 
 use std::convert::AsRef;
 
 use syntax;
 use syntax::parse::token::Token;
 use syntax::tokenstream::TokenTree;
-use syntax::ast::{Item, Expr};
+use syntax::ast::{Item, Ident, Expr};
 use syntax::ext::base::{Annotatable, ExtCtxt};
 use syntax::codemap::{Span, Spanned, DUMMY_SP};
 use syntax::ext::quote::rt::ToTokens;
@@ -70,23 +72,11 @@ pub fn attach_and_emit(out: &mut Vec<Annotatable>, attr: Attribute, to: Annotata
     }
 }
 
-macro_rules! quote_enum {
-    ($ecx:expr, $var:expr => $(::$root:ident)+
-     { $($variant:ident),+ ; $($extra:pat => $result:expr),* }) => ({
-        use syntax::codemap::DUMMY_SP;
-        use syntax::ast::Ident;
-        use $(::$root)+::*;
-        let root_idents = vec![$(Ident::from_str(stringify!($root))),+];
-        match $var {
-            $($variant => {
-                let variant = Ident::from_str(stringify!($variant));
-                let mut idents = root_idents.clone();
-                idents.push(variant);
-                $ecx.path_global(DUMMY_SP, idents)
-            })+
-            $($extra => $result),*
-        }
-    })
+pub fn parse_as_tokens(ecx: &ExtCtxt, string: &str) -> Vec<TokenTree> {
+    use syntax::parse::parse_stream_from_source_str as parse_stream;
+
+    let stream = parse_stream("<_>".into(), string.into(), ecx.parse_sess, None);
+    stream.into_trees().collect()
 }
 
 pub struct TyLifetimeRemover;
@@ -139,4 +129,50 @@ pub fn is_valid_ident<S: AsRef<str>>(s: S) -> bool {
     }
 
     true
+}
+
+pub fn split_idents(path: &str) -> Vec<Ident> {
+    path.split("::").map(|segment| Ident::from_str(segment)).collect()
+}
+
+macro_rules! quote_enum {
+    ($ecx:expr, $var:expr => $(::$root:ident)+
+     { $($variant:ident),+ ; $($extra:pat => $result:expr),* }) => ({
+        use syntax::codemap::DUMMY_SP;
+        use syntax::ast::Ident;
+        use $(::$root)+::*;
+        let root_idents = vec![$(Ident::from_str(stringify!($root))),+];
+        match $var {
+            $($variant => {
+                let variant = Ident::from_str(stringify!($variant));
+                let mut idents = root_idents.clone();
+                idents.push(variant);
+                $ecx.path_global(DUMMY_SP, idents)
+            })+
+            $($extra => $result),*
+        }
+    })
+}
+
+macro_rules! try_parse {
+    ($sp:expr, $parse:expr) => (
+        match $parse {
+            Ok(v) => v,
+            Err(mut e) => { e.emit(); return DummyResult::expr($sp); }
+        }
+    )
+}
+
+macro_rules! p {
+    ("parameter", $num:expr) => (
+        if $num == 1 { "parameter" } else { "parameters" }
+    );
+
+    ($num:expr, "was") => (
+        if $num == 1 { "1 was".into() } else { format!("{} were", $num) }
+    );
+
+    ($num:expr, "parameter") => (
+        if $num == 1 { "1 parameter".into() } else { format!("{} parameters", $num) }
+    )
 }

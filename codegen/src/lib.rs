@@ -1,10 +1,20 @@
+#![crate_type = "dylib"]
+#![feature(quote, concat_idents, plugin_registrar, rustc_private)]
+#![feature(iterator_for_each)]
+#![feature(custom_attribute)]
+#![feature(i128_type)]
+#![allow(unused_attributes)]
+#![allow(deprecated)]
+
+// TODO: Version URLs.
+#![doc(html_root_url = "https://api.rocket.rs")]
+
 //! # Rocket - Code Generation
 //!
 //! This crate implements the code generation portions of Rocket. This includes
-//! custom derives, custom attributes, procedural macros, and lints. The
-//! documentation here is purely technical. The code generation facilities are
-//! documented thoroughly in the [Rocket programming
-//! guide](https://rocket.rs/guide).
+//! custom derives, custom attributes, and procedural macros. The documentation
+//! here is purely technical. The code generation facilities are documented
+//! thoroughly in the [Rocket programming guide](https://rocket.rs/guide).
 //!
 //! ## Custom Attributes
 //!
@@ -18,7 +28,7 @@
 //!   * **head**
 //!   * **patch**
 //!   * **options**
-//!   * **error**
+//!   * **catch**
 //!
 //! The grammar for all _route_ attributes, including **route**, **get**,
 //! **put**, **post**, **delete**, **head**, **patch**, and **options** is
@@ -54,15 +64,15 @@
 //!
 //!     #[get("/hello")]
 //!
-//! The syntax for the **error** attribute is:
+//! The syntax for the **catch** attribute is:
 //!
 //! <pre>
-//! error := INTEGER
+//! catch := INTEGER
 //! </pre>
 //!
-//! A use of the `error` attribute looks like:
+//! A use of the `catch` attribute looks like:
 //!
-//!     #[error(404)]
+//!     #[catch(404)]
 //!
 //! ## Custom Derives
 //!
@@ -116,28 +126,91 @@
 //! This crate implements the following procedural macros:
 //!
 //!   * **routes**
-//!   * **errors**
+//!   * **catchers**
+//!   * **uri**
 //!
-//! The syntax for both of these is defined as:
+//! The syntax for `routes!` and `catchers!` is defined as:
 //!
 //! <pre>
-//! macro := PATH (',' macro)*
+//! macro := PATH (',' PATH)*
 //!
 //! PATH := a path, as defined by Rust
 //! </pre>
 //!
-//! ## Lints
+//! ### Typed URIs: `uri!`
 //!
-//! This crate implements the following lints:
+//! The `uri!` macro creates a type-safe URI given a route and values for the
+//! route's URI parameters.
 //!
-//!   * **unmounted_route**: defaults to _warn_
+//! For example, for the following route:
 //!
-//!     emits a warning when a declared route is not mounted
+//! ```rust,ignore
+//! #[get("/person/<name>/<age>")]
+//! fn person(name: String, age: u8) -> String {
+//!     format!("Hello {}! You're {} years old.", name, age)
+//! }
+//! ```
 //!
-//!   * **unmanaged_state**: defaults to _warn_
+//! A URI can be created as follows:
 //!
-//!     emits a warning when a `State<T>` request guest is used in a mounted
-//!     route without managing a value for `T`
+//! ```rust,ignore
+//! // with unnamed parameters
+//! let mike = uri!(person: "Mike", 28);
+//!
+//! // with named parameters
+//! let mike = uri!(person: name = "Mike", age = 28);
+//! let mike = uri!(person: age = 28, name = "Mike");
+//!
+//! // with a specific mount-point
+//! let mike = uri!("/api", person: name = "Mike", age = 28);
+//! ```
+//!
+//! #### Grammar
+//!
+//! The grammar for the `uri!` macro is as follows:
+//!
+//! <pre>
+//! uri := (mount ',')? PATH (':' params)?
+//!
+//! mount = STRING
+//! params := unnamed | named
+//! unnamed := EXPR (',' EXPR)*
+//! named := IDENT = EXPR (',' named)?
+//!
+//! EXPR := a valid Rust expression (examples: `foo()`, `12`, `"hey"`)
+//! IDENT := a valid Rust identifier (examples: `name`, `age`)
+//! STRING := an uncooked string literal, as defined by Rust (example: `"hi"`)
+//! PATH := a path, as defined by Rust (examples: `route`, `my_mod::route`)
+//! </pre>
+//!
+//! #### Semantics
+//!
+//! The `uri!` macro returns a `Uri` structure with the URI of the supplied
+//! route with the given values. A `uri!` invocation only succeeds if the type
+//! of every value in the invocation matches the type declared for the parameter
+//! in the given route.
+//!
+//! The [`FromUriParam`] trait is used to typecheck and perform a conversion for
+//! each value. If a `FromUriParam<S>` implementation exists for a type `T`,
+//! then a value of type `S` can be used in `uri!` macro for a route URI
+//! parameter declared with a type of `T`. For example, the following
+//! implementation, provided by Rocket, allows an `&str` to be used in a `uri!`
+//! invocation for route URI parameters declared as `String`:
+//!
+//! ```
+//! impl<'a> FromUriParam<&'a str> for String
+//! ```
+//!
+//! Each value passed into `uri!` is rendered in its appropriate place in the
+//! URI using the [`UriDisplay`] implementation for the value's type. The
+//! `UriDisplay` implementation ensures that the rendered value is URI-safe.
+//!
+//! If a mount-point is provided, the mount-point is prepended to the route's
+//! URI.
+//!
+//! [`Uri`]: /rocket/http/uri/struct.URI.html
+//! [`FromUriParam`]: /rocket/http/uri/trait.FromUriParam.html
+//! [`UriDisplay`]: /rocket/http/uri/trait.UriDisplay.html
 //!
 //! # Debugging Codegen
 //!
@@ -150,26 +223,18 @@
 //! ROCKET_CODEGEN_DEBUG=1 cargo build
 //! ```
 
-#![crate_type = "dylib"]
-#![feature(quote, concat_idents, plugin_registrar, rustc_private)]
-#![feature(custom_attribute)]
-#![feature(i128_type)]
-#![allow(unused_attributes)]
-#![allow(deprecated)]
 
 #[macro_use] extern crate log;
-#[macro_use] extern crate rustc;
 extern crate syntax;
 extern crate syntax_ext;
-extern crate syntax_pos;
 extern crate rustc_plugin;
 extern crate rocket;
+extern crate ordermap;
 
 #[macro_use] mod utils;
 mod parser;
 mod macros;
 mod decorators;
-mod lints;
 
 use std::env;
 use rustc_plugin::Registry;
@@ -183,6 +248,7 @@ const ROUTE_STRUCT_PREFIX: &'static str = "static_rocket_route_info_for_";
 const CATCH_STRUCT_PREFIX: &'static str = "static_rocket_catch_info_for_";
 const ROUTE_FN_PREFIX: &'static str = "rocket_route_fn_";
 const CATCH_FN_PREFIX: &'static str = "rocket_catch_fn_";
+const URI_INFO_MACRO_PREFIX: &'static str = "rocket_uri_for_";
 
 const ROUTE_ATTR: &'static str = "rocket_route";
 const ROUTE_INFO_ATTR: &'static str = "rocket_route_info";
@@ -205,10 +271,10 @@ macro_rules! register_derives {
     )
 }
 
-macro_rules! register_lints {
-    ($registry:expr, $($item:ident),+) => ($(
-        $registry.register_late_lint_pass(Box::new(lints::$item::default()));
-    )+)
+macro_rules! register_macros {
+    ($reg:expr, $($n:expr => $f:ident),+) => (
+        $($reg.register_macro($n, macros::$f);)+
+    )
 }
 
 /// Compiler hook for Rust to register plugins.
@@ -219,15 +285,19 @@ pub fn plugin_registrar(reg: &mut Registry) {
         ::rocket::logger::init(::rocket::config::LoggingLevel::Debug);
     }
 
-    reg.register_macro("routes", macros::routes);
-    reg.register_macro("errors", macros::errors);
+    register_macros!(reg,
+        "routes" => routes,
+        "catchers" => catchers,
+        "uri" => uri,
+        "rocket_internal_uri" => uri_internal
+    );
 
     register_derives!(reg,
         "derive_FromForm" => from_form_derive
     );
 
     register_decorators!(reg,
-        "error" => error_decorator,
+        "catch" => catch_decorator,
         "route" => route_decorator,
         "get" => get_decorator,
         "put" => put_decorator,
@@ -237,6 +307,4 @@ pub fn plugin_registrar(reg: &mut Registry) {
         "patch" => patch_decorator,
         "options" => options_decorator
     );
-
-    register_lints!(reg, RocketLint);
 }

@@ -1,6 +1,5 @@
-#![feature(plugin)]
+#![feature(plugin, decl_macro)]
 #![plugin(rocket_codegen)]
-#![allow(unmanaged_state)]
 
 extern crate rocket;
 
